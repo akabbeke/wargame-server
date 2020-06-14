@@ -31,7 +31,6 @@ from time import sleep
 from typing import (IO, Any, Callable, Dict, Iterable, List, Match, Optional,
                     Pattern, Tuple)
 
-from geoip import geolite2  # type: ignore
 from py_rcon import PyRcon
 
 DIR_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -52,6 +51,7 @@ SERVER_LOG_PATH = "serverlog.txt"
 MIN_PLAYER_LEVEL = 5
 LOBBY_RULES = '[EXPERIMENTAL, type "command" for more commands] server rules: strictly no teamkilling (even in self-defense); mark starting zones with flare or chat; minimum player level: ' + str(MIN_PLAYER_LEVEL)
 MIN_VOTES_TO_KICK = 5
+MIN_VOTES_TO_AUTO_BALANCE = 9
 MIN_VOTES_TO_ROTATE = 3
 MIN_VOTES_TO_YEAR = 3
 GENERAL_BLUE_DECK = "XuAVOOkCbkxlBEyoMkgTf1Il1KtJYkaaQ9JaVnSbFS0syQUqwUlT/FVELI6A1nLhNYKTUsil9ScaLGLg"
@@ -89,7 +89,7 @@ def parse_chat() -> None:
     chatfile: IO[str] = open(DEFAULT_CHAT_PATH, "r", encoding="utf-8")
     # read to the end of the file
     chatfile.seek(0, 2) # seek to end of file
-    line_regex = re.compile('\[\d+\] (\d+): (.+)')
+    line_regex = re.compile(r'\[\d+\] (\d+): (.+)')
     while True:
         line = chatfile.readline()
         matched = line_regex.match(line)
@@ -312,14 +312,8 @@ class Game:
             self.handle_rotate_request(from_player)
         elif msg.startswith('year'):
             self.handle_year_request(msg, from_player)
-        elif msg == 'wherefrom':
-            s = []
-            for player in self.players.values():
-                match = geolite2.lookup(player.get_ip())
-                if match:
-                    s.append(player.get_name() + ': ' + match.country)
-            Server.send_message(', '.join(s))
-
+        elif msg.startswith('autobalance'):
+            self.handle_autobalance_request(from_player)
 
     def on_player_level_set(self, playerid: str, playerlevel: int) -> None:
         self.limit_level(playerid, playerlevel)
@@ -387,6 +381,15 @@ class Game:
             for player in self.players.values():
                 player.votes['rotate'] = {}
 
+    def handle_autobalance_request(self, from_player: Player) -> None:
+        from_player.votes['autobalance'][1] = True
+        nvotes = self.count_votes('autobalance', 1, same_team=False)
+        Server.send_message(str(nvotes) + '/' + str(MIN_VOTES_TO_AUTO_BALANCE) + ' votes to autobalance')
+        if nvotes >= MIN_VOTES_TO_AUTO_BALANCE:
+            self.autobalance()
+            for player in self.players.values():
+                player.votes['rotate'] = {}
+
     def handle_year_request(self, msg: str, from_player: Player) -> None:
         year = msg.split(' ')[1]
         if year not in YEAR_MAP:
@@ -433,6 +436,14 @@ class Game:
         self.currentMapId = floor(len(MAP_POOL) * random())
         Server.change_map(MAP_POOL[self.currentMapId])
         print("Rotating map to " + MAP_POOL[self.currentMapId])
+
+    def autobalance(self) -> None:
+        sorted_players = sorted(self.players.items(), key=lambda x: x.get_level())
+        for i, player in enumerate(sorted_players):
+            if i % 2 == 0 and player.get_side() != Side.Bluefor:
+                player.set_side(Side.Bluefor)
+            elif player.get_side() != Side.Redfor:
+                player.set_side(Side.Redfor)
 
     def limit_level(self, playerid: str, playerlevel: int) -> None:
         """Kick players below certain level"""

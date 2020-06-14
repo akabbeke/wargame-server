@@ -15,7 +15,7 @@ class PyRcon(object):
         if self.socket is not None:
             raise PyRconException("Already connected")
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.connect((host, port))
+        self.socket.connect((host, int(port)))
         self.send(3, password)
 
     def disconnect(self):
